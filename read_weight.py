@@ -200,6 +200,7 @@ def main():
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--address", help="Endereço/UUID do dispositivo (ex: 80:F4:AD:DD:37:9A)")
     group.add_argument("--prefix", help="Prefixo do endereço (ex: 80:F4:AD:DD:37)")
+    parser.add_argument("--scan-only", action="store_true", help="Apenas escanear e listar dispositivos BLE detectados e sair")
     parser.add_argument("--scan-time", type=int, default=10, help="Tempo de scan em segundos ao usar --prefix")
     parser.add_argument("--duration", type=int, default=300, help="Tempo em segundos para manter leitura (default 300s)")
     parser.add_argument("--csv", dest="csv", help="Caminho CSV para salvar leituras")
@@ -218,6 +219,19 @@ def main():
 
     async def _wrapper():
         nonlocal address
+        # scan-only: lista todos os dispositivos detectados e sai
+        if args.scan_only:
+            print(f"Escaneando ({args.scan_time}s) e listando todos dispositivos BLE...")
+            devices = await BleakScanner.discover(timeout=args.scan_time)
+            if not devices:
+                print("Nenhum dispositivo detectado.")
+                return
+            for d in devices:
+                name = d.name or "<sem nome>"
+                addr = d.address
+                rssi = getattr(d, 'rssi', '')
+                print(f"{name} | {addr} | RSSI={rssi}")
+            return
         if args.prefix:
             found = await scan_for_prefix(args.prefix, timeout=args.scan_time)
             if not found:
