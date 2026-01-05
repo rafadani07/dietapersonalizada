@@ -80,6 +80,35 @@ def heuristic_parse(data: bytearray):
     return None, None, data
 
 
+def find_weight_in_raw(data: bytearray):
+    """Busca heurística por possíveis valores de peso dentro do payload bruto.
+
+    Tenta varrer offsets procurando uint16/uint32 que, escalados, caiam numa faixa humana plausível.
+    Retorna (weight, unit, details) ou (None, None, None).
+    """
+    if not data:
+        return None, None, None
+
+    # tenta uint16 em todos offsets
+    for off in range(0, max(0, len(data) - 1)):
+        raw16 = int.from_bytes(data[off:off+2], byteorder="little", signed=False)
+        kg = raw16 * 0.005
+        if 2.0 <= kg <= 300.0:
+            return kg, "kg", {"offset": off, "method": "uint16*0.005", "raw16": raw16}
+        lb = raw16 * 0.01
+        if 5.0 <= lb <= 660.0:
+            return lb, "lb", {"offset": off, "method": "uint16*0.01", "raw16": raw16}
+
+    # tenta uint32
+    for off in range(0, max(0, len(data) - 3)):
+        raw32 = int.from_bytes(data[off:off+4], byteorder="little", signed=False)
+        kg32 = raw32 * 0.001
+        if 2.0 <= kg32 <= 300.0:
+            return kg32, "kg", {"offset": off, "method": "uint32*0.001", "raw32": raw32}
+
+    return None, None, None
+
+
 async def scan_for_prefix(prefix: str, timeout: int = 10) -> Optional[str]:
     print(f"Escaneando por dispositivos com prefixo '{prefix}' por {timeout}s...")
     devices = await BleakScanner.discover(timeout=timeout)
@@ -237,9 +266,13 @@ async def run(address: str,
                         ts = datetime.datetime.utcnow().isoformat()
                         # tentar parser padrão
                         weight, unit, _ = parse_weight(raw)
+                        info = None
                         if weight is None:
-                            # heurística
+                            # heurística simples
                             weight, unit, info = heuristic_parse(raw)
+                        if weight is None:
+                            # varrer o payload em busca de uint16/uint32 plausíveis
+                            weight, unit, info = find_weight_in_raw(raw)
                         if weight is None:
                             print(f"{ts} - Raw ({sender}): {raw_hex}")
                             if csv_writer:
