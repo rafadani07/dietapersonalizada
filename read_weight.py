@@ -254,11 +254,39 @@ async def run(address: str,
 
                     disconnected = asyncio.Event()
 
-                    def handle_disconnect(_client):
+                    def handle_disconnect():
                         print("Desconectado do dispositivo.")
                         disconnected.set()
 
-                    client.set_disconnected_callback(handle_disconnect)
+                    # Nem todos os backends do Bleak expõem set_disconnected_callback (ex: winrt).
+                    # Fazemos um fallback: se o método existir, usamos; senão, criamos uma tarefa
+                    # que monitora client.is_connected.
+                    monitor_task = None
+                    try:
+                        if hasattr(client, 'set_disconnected_callback'):
+                            client.set_disconnected_callback(lambda _c: handle_disconnect())
+                        else:
+                            # cria tarefa que monitora a propriedade is_connected
+                            async def _monitor():
+                                try:
+                                    while getattr(client, 'is_connected', False):
+                                        await asyncio.sleep(0.5)
+                                except Exception:
+                                    pass
+                                handle_disconnect()
+
+                            monitor_task = asyncio.create_task(_monitor())
+                    except Exception:
+                        # se qualquer problema, garante que monitor será criado
+                        async def _monitor_fallback():
+                            try:
+                                while getattr(client, 'is_connected', False):
+                                    await asyncio.sleep(0.5)
+                            except Exception:
+                                pass
+                            handle_disconnect()
+
+                        monitor_task = asyncio.create_task(_monitor_fallback())
 
                     async def generic_handler(sender, data):
                         raw = bytearray(data)
