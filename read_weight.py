@@ -20,6 +20,9 @@ import asyncio
 import argparse
 import platform
 import sys
+import csv
+import datetime
+import time
 from typing import Optional
 
 from bleak import BleakScanner, BleakClient
@@ -71,37 +74,103 @@ async def list_services(address: str):
                 print(f"  Char {c.uuid} ({props})")
 
 
-async def run(address: str, duration: int = 300):
+async def run(address: str,
+              duration: int = 300,
+              csv_path: Optional[str] = None,
+              reconnect: bool = False,
+              retry_interval: int = 5):
+    """Tenta conectar e ler a característica de peso.
+
+    Se reconnect for True, tenta reconectar até o tempo total expirar.
+    """
     print(f"Tentando conectar em {address}...")
+
+    end_time = time.time() + duration
+
+    # Prepara CSV se solicitado
+    csv_file = None
+    csv_writer = None
+    if csv_path:
+        # abre em append, escreve header se arquivo novo
+        need_header = True
+        try:
+            with open(csv_path, "r", encoding="utf-8"):
+                need_header = False
+        except FileNotFoundError:
+            need_header = True
+
+        csv_file = open(csv_path, "a", newline="", encoding="utf-8")
+        csv_writer = csv.writer(csv_file)
+        if need_header:
+            csv_writer.writerow(["timestamp_utc", "weight", "unit"])
+
     try:
-        async with BleakClient(address) as client:
-            if not client.is_connected:
-                print("Falha ao conectar.")
-                return
+        while time.time() < end_time:
+            try:
+                async with BleakClient(address) as client:
+                    if not client.is_connected:
+                        print("Falha ao conectar.")
+                        raise Exception("failed to connect")
 
-            print("Conectado. Procurando característica de peso...")
-            if WEIGHT_CHAR in [c.uuid for s in await client.get_services() for c in s.characteristics]:
-                print("Characteristic Weight Measurement encontrada. Subscribing...")
+                    print("Conectado. Procurando característica de peso...")
+                    services = await client.get_services()
+                    characteristic_uuids = [c.uuid for s in services for c in s.characteristics]
+                    if WEIGHT_CHAR in characteristic_uuids:
+                        print("Characteristic Weight Measurement encontrada. Subscribing...")
 
-                def callback(sender, data):
-                    weight, unit, raw = parse_weight(bytearray(data))
-                    if weight is None:
-                        print(f"Dados inválidos: {raw}")
+                        disconnected = asyncio.Event()
+
+                        def handle_disconnect(_client):
+                            print("Desconectado do dispositivo.")
+                            disconnected.set()
+
+                        client.set_disconnected_callback(handle_disconnect)
+
+                        def notification_handler(sender, data):
+                            weight, unit, raw = parse_weight(bytearray(data))
+                            ts = datetime.datetime.utcnow().isoformat()
+                            if weight is None:
+                                print(f"Dados inválidos: {raw}")
+                            else:
+                                print(f"{ts} - Peso: {weight:.3f} {unit}")
+                                if csv_writer:
+                                    csv_writer.writerow([ts, f"{weight:.3f}", unit])
+                                    csv_file.flush()
+
+                        await client.start_notify(WEIGHT_CHAR, notification_handler)
+
+                        # aguarda até desconexão ou até o tempo total expirar
+                        remaining = end_time - time.time()
+                        try:
+                            await asyncio.wait_for(disconnected.wait(), timeout=remaining)
+                            # Se chegamos aqui, desconectou antes do fim
+                            await client.stop_notify(WEIGHT_CHAR)
+                            print("Notificações paradas após desconexão.")
+                        except asyncio.TimeoutError:
+                            # tempo esgotado - fim normal
+                            await client.stop_notify(WEIGHT_CHAR)
+                            print("Duração concluída; parando leitura.")
+                            return
                     else:
-                        print(f"Peso: {weight:.3f} {unit}")
+                        print("Característica padrão não encontrada. Listando serviços/characterísticas:")
+                        await list_services(address)
+                        return
+            except Exception as e:
+                print(f"Erro durante conexão/leitura: {e}")
 
-                await client.start_notify(WEIGHT_CHAR, callback)
-                print(f"Lendo por {duration} segundos (CTRL+C para parar)...")
-                try:
-                    await asyncio.sleep(duration)
-                except asyncio.CancelledError:
-                    pass
-                await client.stop_notify(WEIGHT_CHAR)
-            else:
-                print("Característica padrão não encontrada. Listando serviços/characterísticas:")
-                await list_services(address)
-    except Exception as e:
-        print(f"Erro durante conexão/leitura: {e}")
+            # Se não pedir reconectar, sai
+            if not reconnect:
+                break
+
+            # tempo restante para tentativa de reconexão
+            remaining_time = end_time - time.time()
+            if remaining_time <= 0:
+                break
+            print(f"Tentando reconectar em {retry_interval}s... (tempo restante {int(remaining_time)}s)")
+            await asyncio.sleep(retry_interval)
+    finally:
+        if csv_file:
+            csv_file.close()
 
 
 def ensure_python_platform():
