@@ -292,6 +292,17 @@
         </svg> Treino Personalizado</h3><span id="workout-level-badge" class="px-3 py-1 bg-purple-500/20 rounded-lg text-xs font-semibold"></span>
       </div>
       <div id="workout-plan" class="space-y-4"></div>
+      <!-- Save workout UI -->
+      <div class="mt-4 p-4 bg-gray-800/30 rounded-xl border border-white/10">
+        <h4 class="text-lg font-bold mb-3">Salvar Treino</h4>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <input id="save-workout-name" placeholder="Nome do treino (ex: Treino do Rafael)" class="px-4 py-3 glass-effect border border-white/10 rounded-xl text-white" />
+          <input id="save-workout-person" placeholder="Pessoa (ex: Rafael)" class="px-4 py-3 glass-effect border border-white/10 rounded-xl text-white" />
+          <button id="save-workout-btn" class="px-4 py-3 gradient-primary rounded-xl font-semibold">Salvar Treino</button>
+        </div>
+        <p class="text-xs text-gray-400 mt-3">Treinos salvos:</p>
+        <ul id="saved-workouts" class="mt-2 space-y-2 list-none p-0"></ul>
+      </div>
      </div><!-- Diet Plan -->
      <div class="glass-effect rounded-2xl p-6 sm:p-8 border border-white/10">
       <h3 class="text-xl sm:text-2xl font-bold mb-6 flex items-center">
@@ -1215,6 +1226,114 @@
     }
 
     initApp();
+
+    // -----------------------------
+    // Saved workouts (localStorage)
+    // -----------------------------
+    const WORKOUTS_KEY = 'fp_workouts_v1';
+
+    function getSavedWorkouts(){
+      try{
+        return JSON.parse(localStorage.getItem(WORKOUTS_KEY) || '[]');
+      }catch(e){
+        console.error('Erro ao ler treinos salvos', e);
+        return [];
+      }
+    }
+
+    function setSavedWorkouts(arr){
+      localStorage.setItem(WORKOUTS_KEY, JSON.stringify(arr));
+    }
+
+    function saveWorkout(name, person, payload){
+      if(!name) return;
+      const list = getSavedWorkouts();
+      const item = { id: Date.now(), name: name.trim(), person: (person||'').trim(), payload: payload||{}, created: new Date().toISOString() };
+      list.unshift(item);
+      setSavedWorkouts(list);
+      renderSavedWorkouts();
+    }
+
+    function deleteWorkout(id){
+      const list = getSavedWorkouts().filter(i => i.id !== id);
+      setSavedWorkouts(list);
+      renderSavedWorkouts();
+    }
+
+    function loadWorkoutToUI(item){
+      // carrega apenas informações simples na área de treino
+      const container = document.getElementById('workout-plan');
+      if(!container) return;
+      container.innerHTML = '';
+      const el = document.createElement('div');
+      el.className = 'p-4 bg-gray-900/40 rounded-xl border border-white/5';
+      el.innerHTML = `<div class="flex items-center justify-between"><div><h4 class="font-bold text-lg">${escapeHtml(item.name)}</h4><p class="text-sm text-gray-400">Pessoa: ${escapeHtml(item.person||'—')}</p></div><div class="text-xs text-gray-400">Salvo em ${new Date(item.created).toLocaleString()}</div></div><div class="mt-3 text-sm text-gray-300">${item.payload && item.payload.note ? escapeHtml(item.payload.note) : ''}</div>`;
+      container.appendChild(el);
+    }
+
+    function renderSavedWorkouts(){
+      const ul = document.getElementById('saved-workouts');
+      if(!ul) return;
+      const list = getSavedWorkouts();
+      ul.innerHTML = '';
+      if(list.length === 0){
+        const li = document.createElement('li');
+        li.className = 'text-sm text-gray-400';
+        li.textContent = 'Nenhum treino salvo ainda.';
+        ul.appendChild(li);
+        return;
+      }
+      list.forEach(item => {
+        const li = document.createElement('li');
+        li.className = 'flex items-center justify-between bg-gray-800/40 p-3 rounded-xl border border-white/5';
+        const left = document.createElement('div');
+        left.innerHTML = `<div class="font-semibold">${escapeHtml(item.name)}</div><div class="text-xs text-gray-400">${escapeHtml(item.person||'—')}</div>`;
+        const actions = document.createElement('div');
+        actions.className = 'flex items-center gap-2';
+        const loadBtn = document.createElement('button');
+        loadBtn.className = 'px-3 py-1 bg-blue-500/20 hover:bg-blue-500/30 rounded-md text-sm';
+        loadBtn.textContent = 'Carregar';
+        loadBtn.onclick = () => loadWorkoutToUI(item);
+        const delBtn = document.createElement('button');
+        delBtn.className = 'px-3 py-1 bg-red-500/20 hover:bg-red-500/30 rounded-md text-sm';
+        delBtn.textContent = 'Apagar';
+        delBtn.onclick = () => { if(confirm('Apagar este treino?')) deleteWorkout(item.id); };
+        actions.appendChild(loadBtn);
+        actions.appendChild(delBtn);
+        li.appendChild(left);
+        li.appendChild(actions);
+        ul.appendChild(li);
+      });
+    }
+
+    function escapeHtml(s){
+      if(!s) return '';
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"})[c]);
+    }
+
+    // Wire up save button
+    (function(){
+      const btn = document.getElementById('save-workout-btn');
+      if(btn){
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          const name = document.getElementById('save-workout-name').value || '';
+          const person = document.getElementById('save-workout-person').value || '';
+          // you could capture more of the current plan here (payload)
+          const payload = { note: `Plano salvo para ${person || 'Usuário'}` };
+          if(!name.trim()){
+            alert('Digite um nome para o treino.');
+            return;
+          }
+          saveWorkout(name, person, payload);
+          document.getElementById('save-workout-name').value = '';
+          document.getElementById('save-workout-person').value = '';
+        });
+      }
+      // render on load
+      try{ renderSavedWorkouts(); }catch(e){console.error(e)}
+    })();
+
   </script>
  <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9b94be5dd4128dd8',t:'MTc2NzYzNDY0Ni4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
