@@ -52,6 +52,34 @@ def parse_weight(data: bytearray):
     return weight, unit, data
 
 
+def heuristic_parse(data: bytearray):
+    """Tenta interpretar bytes brutos comuns como peso (heurísticas).
+
+    Retorna tuple (value, unit, info) onde value pode ser None se não for interpretável.
+    """
+    if not data or len(data) < 2:
+        return None, None, data
+
+    # try uint16 little-endian -> kg (0.005) or lb (0.01)
+    raw16 = int.from_bytes(data[0:2], byteorder="little", signed=False)
+    kg = raw16 * 0.005
+    lb = raw16 * 0.01
+    # prefer kg if value reasonable (< 500 kg)
+    if 0 < kg < 500:
+        return kg, "kg", {"raw16": raw16, "method": "uint16*0.005"}
+    if 0 < lb < 1000:
+        return lb, "lb", {"raw16": raw16, "method": "uint16*0.01"}
+
+    # try uint32 little-endian
+    if len(data) >= 4:
+        raw32 = int.from_bytes(data[0:4], byteorder="little", signed=False)
+        kg32 = raw32 * 0.001
+        if 0 < kg32 < 500:
+            return kg32, "kg", {"raw32": raw32, "method": "uint32*0.001"}
+
+    return None, None, data
+
+
 async def scan_for_prefix(prefix: str, timeout: int = 10) -> Optional[str]:
     print(f"Escaneando por dispositivos com prefixo '{prefix}' por {timeout}s...")
     devices = await BleakScanner.discover(timeout=timeout)
@@ -134,57 +162,141 @@ async def run(address: str,
                         services = getattr(client, "services", None)
                     service_uuids = [s.uuid for s in services]
                     characteristic_uuids = [c.uuid for s in services for c in s.characteristics]
+
+                    # Prioridade 1: característica padrão 0x2A9D
+                    chosen_char = None
                     if WEIGHT_CHAR in characteristic_uuids:
-                        print("Characteristic Weight Measurement encontrada. Subscribing...")
+                        chosen_char = WEIGHT_CHAR
 
-                        disconnected = asyncio.Event()
+                    # Prioridade 2: característica -- caso o usuário deseje indicar via env/arg (handled earlier)
 
-                        def handle_disconnect(_client):
-                            print("Desconectado do dispositivo.")
-                            disconnected.set()
+                    # Prioridade 3: vendor-specific notify (ex: 00002b10) ou qualquer característica com 'notify'
+                    if not chosen_char:
+                        # prefer explicit 2b10
+                        for s in services:
+                            if s.uuid.lower().startswith("00001910"):
+                                for c in s.characteristics:
+                                    if 'notify' in getattr(c, 'properties', []):
+                                        chosen_char = c.uuid
+                                        break
+                            if chosen_char:
+                                break
 
-                        client.set_disconnected_callback(handle_disconnect)
+                    if not chosen_char:
+                        # fallback: pick any characteristic with notify
+                        for s in services:
+                            for c in s.characteristics:
+                                if 'notify' in getattr(c, 'properties', []):
+                                    chosen_char = c.uuid
+                                    break
+                            if chosen_char:
+                                break
 
-                        def notification_handler(sender, data):
-                            weight, unit, raw = parse_weight(bytearray(data))
-                            ts = datetime.datetime.utcnow().isoformat()
-                            raw_hex = bytes(raw).hex() if raw is not None else ""
-                            services_summary = ";".join(service_uuids) if csv_raw else ""
-                            if weight is None:
-                                print(f"Dados inválidos: {raw}")
-                                if csv_writer:
-                                    if csv_raw:
-                                        csv_writer.writerow([ts, "", "", raw_hex, services_summary])
-                                    else:
-                                        csv_writer.writerow([ts, "", ""])
-                                    csv_file.flush()
-                            else:
-                                print(f"{ts} - Peso: {weight:.3f} {unit}")
-                                if csv_writer:
-                                    if csv_raw:
-                                        csv_writer.writerow([ts, f"{weight:.3f}", unit, raw_hex, services_summary])
-                                    else:
-                                        csv_writer.writerow([ts, f"{weight:.3f}", unit])
-                                    csv_file.flush()
+                    # Se ainda não encontrou, tente ler características 'read' que possam conter dados
+                    if not chosen_char:
+                        print("Nenhuma característica notify encontrada; tentando ler características 'read' para possíveis dados de peso...")
+                        for s in services:
+                            for c in s.characteristics:
+                                if 'read' in getattr(c, 'properties', []):
+                                    try:
+                                        data = await client.read_gatt_char(c.uuid)
+                                        raw_hex = data.hex()
+                                        print(f"Leu {c.uuid}: {raw_hex}")
+                                        # try heuristic
+                                        val, unit, info = heuristic_parse(bytearray(data))
+                                        if val is not None:
+                                            ts = datetime.datetime.utcnow().isoformat()
+                                            print(f"HEURÍSTICA encontrou peso aproximado: {val:.3f} {unit} (char {c.uuid})")
+                                            if csv_writer:
+                                                csv_writer.writerow([ts, f"{val:.3f}", unit, raw_hex, ";".join(service_uuids) if csv_raw else ""]) 
+                                                csv_file.flush()
+                                            chosen_char = c.uuid
+                                            break
+                                    except Exception:
+                                        pass
+                            if chosen_char:
+                                break
 
-                        await client.start_notify(WEIGHT_CHAR, notification_handler)
+                    if not chosen_char:
+                        print("Não foi possível identificar uma característica para ler/notificar.")
+                        return
+
+                    print(f"Usando característica {chosen_char} para receber dados (notificar/ler)")
+
+                    disconnected = asyncio.Event()
+
+                    def handle_disconnect(_client):
+                        print("Desconectado do dispositivo.")
+                        disconnected.set()
+
+                    client.set_disconnected_callback(handle_disconnect)
+
+                    async def generic_handler(sender, data):
+                        raw = bytearray(data)
+                        raw_hex = bytes(raw).hex()
+                        ts = datetime.datetime.utcnow().isoformat()
+                        # tentar parser padrão
+                        weight, unit, _ = parse_weight(raw)
+                        if weight is None:
+                            # heurística
+                            weight, unit, info = heuristic_parse(raw)
+                        if weight is None:
+                            print(f"{ts} - Raw ({sender}): {raw_hex}")
+                            if csv_writer:
+                                csv_writer.writerow([ts, "", "", raw_hex, ";".join(service_uuids) if csv_raw else ""])
+                                csv_file.flush()
+                        else:
+                            print(f"{ts} - Peso: {weight:.3f} {unit} (raw={raw_hex})")
+                            if csv_writer:
+                                if csv_raw:
+                                    csv_writer.writerow([ts, f"{weight:.3f}", unit, raw_hex, ";".join(service_uuids)])
+                                else:
+                                    csv_writer.writerow([ts, f"{weight:.3f}", unit])
+                                csv_file.flush()
+
+                    # subscribe if notify available, otherwise perform periodic reads
+                    # find characteristic object for chosen_char
+                    chosen_char_obj = None
+                    for s in services:
+                        for c in s.characteristics:
+                            if c.uuid == chosen_char:
+                                chosen_char_obj = c
+                                break
+                        if chosen_char_obj:
+                            break
+
+                    if chosen_char_obj and 'notify' in getattr(chosen_char_obj, 'properties', []):
+                        await client.start_notify(chosen_char, generic_handler)
+                    else:
+                        # periodic read loop until timeout or disconnect
+                        while time.time() < end_time and not disconnected.is_set():
+                            try:
+                                data = await client.read_gatt_char(chosen_char)
+                                await generic_handler(chosen_char, data)
+                            except Exception as e:
+                                print(f"Erro lendo characteristic {chosen_char}: {e}")
+                                break
+                            await asyncio.sleep(1)
 
                         # aguarda até desconexão ou até o tempo total expirar
                         remaining = end_time - time.time()
                         try:
                             await asyncio.wait_for(disconnected.wait(), timeout=remaining)
                             # Se chegamos aqui, desconectou antes do fim
-                            await client.stop_notify(WEIGHT_CHAR)
+                            # se usamos notify, pare a notificação
+                            try:
+                                await client.stop_notify(chosen_char)
+                            except Exception:
+                                pass
                             print("Notificações paradas após desconexão.")
                         except asyncio.TimeoutError:
                             # tempo esgotado - fim normal
-                            await client.stop_notify(WEIGHT_CHAR)
+                            try:
+                                await client.stop_notify(chosen_char)
+                            except Exception:
+                                pass
                             print("Duração concluída; parando leitura.")
                             return
-                    else:
-                        print("Característica padrão não encontrada. Listando serviços/characterísticas:")
-                        await list_services(address)
-                        return
             except Exception as e:
                 print(f"Erro durante conexão/leitura: {e}")
 
