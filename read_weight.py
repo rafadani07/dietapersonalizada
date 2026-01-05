@@ -387,6 +387,7 @@ def main():
     group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument("--address", help="Endereço/UUID do dispositivo (ex: 80:F4:AD:DD:37:9A)")
     group.add_argument("--prefix", help="Prefixo do endereço (ex: 80:F4:AD:DD:37)")
+    parser.add_argument("--scan-and-connect", action="store_true", help="Escanear continuamente pelo prefixo e conectar automaticamente quando visto")
     parser.add_argument("--scan-only", action="store_true", help="Apenas escanear e listar dispositivos BLE detectados e sair")
     parser.add_argument("--scan-time", type=int, default=10, help="Tempo de scan em segundos ao usar --prefix")
     parser.add_argument("--duration", type=int, default=300, help="Tempo em segundos para manter leitura (default 300s)")
@@ -423,12 +424,39 @@ def main():
                 rssi = getattr(d, 'rssi', '')
                 print(f"{name} | {addr} | RSSI={rssi}")
             return
-        if args.prefix:
+
+        # se pediu scan-and-connect, faça scans repetidos até encontrar o prefixo (ou expirar)
+        if args.scan_and_connect:
+            if not args.prefix and not address:
+                parser.error('--scan-and-connect requires --prefix or --address')
+
+            # se o usuário passou explicitamente um address, usa direto
+            if not address and args.prefix:
+                print(f"Modo scan-and-connect: procurando por prefixo {args.prefix} até conectar...")
+                scan_deadline = time.time() + max(args.scan_time, 60)
+                found = None
+                while time.time() < scan_deadline and not found:
+                    found = await scan_for_prefix(args.prefix, timeout=min(5, args.scan_time))
+                    if found:
+                        print(f"Dispositivo visto: {found}. Tentando conectar...")
+                        address = found
+                        break
+                    await asyncio.sleep(1)
+
+                if not found and not address:
+                    print("Nenhum dispositivo com esse prefixo encontrado dentro do tempo permitido.")
+                    return
+
+        # comportamento existente: permitir --prefix único
+        if args.prefix and not address:
             found = await scan_for_prefix(args.prefix, timeout=args.scan_time)
             if not found:
                 print("Nenhum dispositivo com esse prefixo encontrado.")
                 return
             address = found
+
+        if not address:
+            parser.error('one of the arguments --address --prefix is required unless --scan-only is used')
 
         await run(address, duration=args.duration, csv_path=csv_path, reconnect=reconnect, retry_interval=retry_interval, csv_raw=csv_raw)
 
