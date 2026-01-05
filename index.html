@@ -124,6 +124,14 @@
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
         </svg><span>Conectar Balança</span> </button>
       </div>
+      <!-- Saved workouts section (welcome) -->
+      <div id="saved-workouts-section" class="mt-6 hidden">
+        <div class="flex items-center justify-between mb-3">
+          <h4 class="font-bold text-lg">Seus Treinos</h4>
+          <span id="workout-count-badge" class="px-2 py-1 bg-purple-500/20 rounded-lg text-xs font-semibold">0</span>
+        </div>
+        <div id="saved-workouts-list" class="grid grid-cols-1 sm:grid-cols-2 gap-3"></div>
+      </div>
       <div class="pt-8 glass-effect rounded-2xl p-6 max-w-3xl mx-auto">
        <h3 class="font-bold text-lg mb-4 text-purple-300">✨ Recursos Premium</h3>
        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
@@ -1222,7 +1230,19 @@
 
     const dataHandler = {
       onDataChanged(data) {
-        // Data updates handled through user actions
+        try{
+          // Render saved workouts coming from the backend (type: 'workout_plan')
+          const workoutPlans = (data || []).filter(d => d.type === 'workout_plan' || d.type === 'workout');
+          if(workoutPlans && workoutPlans.length) {
+            renderSavedWorkouts(workoutPlans);
+          } else {
+            // hide section if none
+            const section = document.getElementById('saved-workouts-section');
+            if(section) section.classList.add('hidden');
+          }
+        }catch(e){
+          console.error('dataHandler.onDataChanged error', e);
+        }
       }
     };
 
@@ -1307,14 +1327,14 @@
       const item = { id: Date.now(), name: name.trim(), person: (person||'').trim(), payload: payload||{}, created: new Date().toISOString() };
       list.unshift(item);
       setSavedWorkouts(list);
-      renderSavedWorkouts();
+      renderLocalSavedWorkouts();
       try{ renderWelcomeSavedLists(); }catch(e){}
     }
 
     function deleteWorkout(id){
       const list = getSavedWorkouts().filter(i => i.id !== id);
       setSavedWorkouts(list);
-      renderSavedWorkouts();
+      renderLocalSavedWorkouts();
     }
 
     function loadWorkoutToUI(item){
@@ -1328,7 +1348,7 @@
       container.appendChild(el);
     }
 
-    function renderSavedWorkouts(){
+    function renderLocalSavedWorkouts(){
       const ul = document.getElementById('saved-workouts');
       if(!ul) return;
       const list = getSavedWorkouts();
@@ -1397,6 +1417,148 @@
       });
     }
 
+    // Render saved workouts coming from backend dataSdk
+    function renderSavedWorkouts(workouts){
+      const section = document.getElementById('saved-workouts-section');
+      const list = document.getElementById('saved-workouts-list');
+      const badge = document.getElementById('workout-count-badge');
+      if(!section || !list || !badge) return;
+
+      if(!workouts || workouts.length === 0){
+        section.classList.add('hidden');
+        return;
+      }
+
+      section.classList.remove('hidden');
+      badge.textContent = `${workouts.length} treino${workouts.length > 1 ? 's' : ''}`;
+
+      list.innerHTML = workouts.map(workout => {
+        const workoutData = workout.notes ? JSON.parse(workout.notes) : {};
+        const date = workout.date ? new Date(workout.date).toLocaleDateString('pt-BR') : '';
+        const levelNames = { beginner: 'Iniciante', intermediate: 'Intermediário', advanced: 'Avançado' };
+        const levelName = levelNames[workoutData.level] || 'N/A';
+        const calories = workoutData.goalCalories || workoutData.calories || 0;
+        const protein = (workoutData.macros && workoutData.macros.protein) ? workoutData.macros.protein : (workoutData.protein || 0);
+        const weight = workoutData.weight || 0;
+        const backendId = workout.__backendId || workout.id || workout._id || '';
+
+        return `
+          <div class="glass-effect rounded-xl p-5 border border-purple-500/30 card-hover">
+            <div class="flex items-start justify-between mb-3">
+              <div class="flex-1">
+                <h4 class="font-bold text-lg text-white mb-1">${escapeHtml(workout.name || 'Treino Personalizado')}</h4>
+                <p class="text-xs text-gray-400">${date}</p>
+              </div>
+              <span class="px-2 py-1 bg-purple-500/20 rounded-lg text-xs font-semibold">${levelName}</span>
+            </div>
+            <div class="space-y-2 mb-4">
+              <div class="flex items-center justify-between text-sm">
+                <span class="text-gray-400">Calorias:</span>
+                <span class="font-semibold text-pink-400">${calories} kcal</span>
+              </div>
+              <div class="flex items-center justify-between text-sm">
+                <span class="text-gray-400">Proteína:</span>
+                <span class="font-semibold text-green-400">${protein}g</span>
+              </div>
+              <div class="flex items-center justify-between text-sm">
+                <span class="text-gray-400">Peso:</span>
+                <span class="font-semibold text-blue-400">${weight}kg</span>
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <button class="open-workout-btn flex-1 px-4 py-2 gradient-primary rounded-lg font-semibold text-sm hover:scale-105 transition-all" data-workout-id="${escapeHtml(backendId)}">Abrir</button>
+              <button class="delete-workout-btn px-4 py-2 bg-red-500/20 hover:bg-red-500/30 rounded-lg font-semibold text-sm transition-all" data-workout-id="${escapeHtml(backendId)}"> <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // attach listeners
+      list.querySelectorAll('.open-workout-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const workoutId = btn.dataset.workoutId;
+          loadWorkout(workoutId, workouts);
+        });
+      });
+
+      list.querySelectorAll('.delete-workout-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const workoutId = btn.dataset.workoutId;
+          const workout = workouts.find(w => (w.__backendId || w.id || w._id || '') === workoutId);
+          if(workout){
+            btn.disabled = true;
+            const prev = btn.innerHTML;
+            btn.innerHTML = '<div class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>';
+            try{
+              const result = await window.dataSdk.delete(workout);
+              if(!result || !result.isOk){
+                console.error('Failed to delete workout');
+                btn.disabled = false;
+                btn.innerHTML = prev;
+              }
+            }catch(e){
+              console.error('delete error', e);
+              btn.disabled = false;
+              btn.innerHTML = prev;
+            }
+          }
+        });
+      });
+    }
+
+    // Load a saved workout from backend list into the UI
+    function loadWorkout(workoutId, workouts){
+      const workout = workouts.find(w => (w.__backendId || w.id || w._id || '') === workoutId);
+      if(!workout || !workout.notes) return;
+      let workoutData = {};
+      try{ workoutData = JSON.parse(workout.notes); }catch(e){ console.error('invalid workout notes', e); return; }
+
+      // populate form fields
+      document.getElementById('weight').value = workoutData.weight || '';
+      document.getElementById('height').value = workoutData.height || '';
+      document.getElementById('age').value = workoutData.age || '';
+      document.getElementById('gender').value = workoutData.gender || 'male';
+      document.getElementById('bodyfat').value = workoutData.bodyfat || '';
+      document.getElementById('muscle').value = workoutData.muscle || '';
+      document.getElementById('activity').value = workoutData.activity || '1.55';
+      document.getElementById('goal').value = workoutData.goal || 'maintain';
+      document.getElementById('training-days').value = workoutData.trainingDays || 5;
+      document.getElementById('level').value = workoutData.level || 'intermediate';
+
+      userData = workoutData;
+
+      const tmb = calculateTMB(workoutData.weight, workoutData.height, workoutData.age, workoutData.gender);
+      const tdee = calculateTDEE(tmb, workoutData.activity);
+      const goalCalories = calculateGoalCalories(tdee, workoutData.goal);
+      const macros = calculateMacros(goalCalories, workoutData.weight, workoutData.goal);
+      waterGoal = parseFloat(calculateWaterGoal(workoutData.weight, workoutData.activity, workoutData.trainingDays));
+
+      calculatedData = { tmb, tdee, goalCalories, macros };
+
+      document.getElementById('tmb-value').textContent = Math.round(tmb);
+      document.getElementById('tdee-value').textContent = Math.round(tdee);
+      document.getElementById('goal-calories').textContent = goalCalories;
+      document.getElementById('protein-value').textContent = macros.protein + 'g';
+
+      const totalGrams = macros.protein + macros.carbs + macros.fat;
+      document.getElementById('protein-grams').textContent = `${macros.protein}g (${Math.round((macros.protein/totalGrams)*100)}%)`;
+      document.getElementById('carbs-grams').textContent = `${macros.carbs}g (${Math.round((macros.carbs/totalGrams)*100)}%)`;
+      document.getElementById('fat-grams').textContent = `${macros.fat}g (${Math.round((macros.fat/totalGrams)*100)}%)`;
+
+      document.getElementById('protein-bar').style.width = (macros.protein / totalGrams * 100) + '%';
+      document.getElementById('carbs-bar').style.width = (macros.carbs / totalGrams * 100) + '%';
+      document.getElementById('fat-bar').style.width = (macros.fat / totalGrams * 100) + '%';
+
+      document.getElementById('water-goal').textContent = waterGoal;
+      updateWaterProgress();
+
+      renderWorkoutPlan(workoutData.trainingDays, workoutData.level);
+      renderDietPlan(goalCalories, macros, workoutData.goal);
+      updateMacrosChart(macros);
+
+      showScreen('dashboard');
+    }
+
     function escapeHtml(s){
       if(!s) return '';
       return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"})[c]);
@@ -1422,7 +1584,7 @@
         });
       }
       // render on load
-      try{ renderSavedWorkouts(); renderWelcomeSavedLists(); }catch(e){console.error(e)}
+  try{ renderLocalSavedWorkouts(); renderWelcomeSavedLists(); }catch(e){console.error(e)}
     })();
 
   </script>

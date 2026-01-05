@@ -1,0 +1,13 @@
+{
+  "workout": {
+    "calories": "number",
+    "protein": "number",
+    "carbs": "number",
+    "fat": "number",
+    "caloriesBurned": "number",
+    "mealName": "string",
+    "mealCalories": "number",
+    "exerciseName": "string",
+    "name": "string"
+  }
+}
