@@ -197,7 +197,7 @@ def ensure_python_platform():
 
 def main():
     parser = argparse.ArgumentParser(description="Ler pesos de uma balança BLE")
-    group = parser.add_mutually_exclusive_group(required=True)
+    group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument("--address", help="Endereço/UUID do dispositivo (ex: 80:F4:AD:DD:37:9A)")
     group.add_argument("--prefix", help="Prefixo do endereço (ex: 80:F4:AD:DD:37)")
     parser.add_argument("--scan-only", action="store_true", help="Apenas escanear e listar dispositivos BLE detectados e sair")
@@ -210,6 +210,10 @@ def main():
 
     args = parser.parse_args()
     ensure_python_platform()
+
+    # permitir --scan-only sem --address/--prefix
+    if not args.scan_only and not (args.address or args.prefix):
+        parser.error('one of the arguments --address --prefix is required unless --scan-only is used')
 
     address = args.address
     csv_path = args.csv
