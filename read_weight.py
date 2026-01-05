@@ -78,7 +78,8 @@ async def run(address: str,
               duration: int = 300,
               csv_path: Optional[str] = None,
               reconnect: bool = False,
-              retry_interval: int = 5):
+              retry_interval: int = 5,
+              csv_raw: bool = False):
     """Tenta conectar e ler a característica de peso.
 
     Se reconnect for True, tenta reconectar até o tempo total expirar.
@@ -102,7 +103,10 @@ async def run(address: str,
         csv_file = open(csv_path, "a", newline="", encoding="utf-8")
         csv_writer = csv.writer(csv_file)
         if need_header:
-            csv_writer.writerow(["timestamp_utc", "weight", "unit"])
+            if csv_raw:
+                csv_writer.writerow(["timestamp_utc", "weight", "unit", "raw_hex", "services"])
+            else:
+                csv_writer.writerow(["timestamp_utc", "weight", "unit"])
 
     try:
         while time.time() < end_time:
@@ -114,6 +118,7 @@ async def run(address: str,
 
                     print("Conectado. Procurando característica de peso...")
                     services = await client.get_services()
+                    service_uuids = [s.uuid for s in services]
                     characteristic_uuids = [c.uuid for s in services for c in s.characteristics]
                     if WEIGHT_CHAR in characteristic_uuids:
                         print("Characteristic Weight Measurement encontrada. Subscribing...")
@@ -129,12 +134,23 @@ async def run(address: str,
                         def notification_handler(sender, data):
                             weight, unit, raw = parse_weight(bytearray(data))
                             ts = datetime.datetime.utcnow().isoformat()
+                            raw_hex = bytes(raw).hex() if raw is not None else ""
+                            services_summary = ";".join(service_uuids) if csv_raw else ""
                             if weight is None:
                                 print(f"Dados inválidos: {raw}")
+                                if csv_writer:
+                                    if csv_raw:
+                                        csv_writer.writerow([ts, "", "", raw_hex, services_summary])
+                                    else:
+                                        csv_writer.writerow([ts, "", ""])
+                                    csv_file.flush()
                             else:
                                 print(f"{ts} - Peso: {weight:.3f} {unit}")
                                 if csv_writer:
-                                    csv_writer.writerow([ts, f"{weight:.3f}", unit])
+                                    if csv_raw:
+                                        csv_writer.writerow([ts, f"{weight:.3f}", unit, raw_hex, services_summary])
+                                    else:
+                                        csv_writer.writerow([ts, f"{weight:.3f}", unit])
                                     csv_file.flush()
 
                         await client.start_notify(WEIGHT_CHAR, notification_handler)
@@ -186,11 +202,19 @@ def main():
     group.add_argument("--prefix", help="Prefixo do endereço (ex: 80:F4:AD:DD:37)")
     parser.add_argument("--scan-time", type=int, default=10, help="Tempo de scan em segundos ao usar --prefix")
     parser.add_argument("--duration", type=int, default=300, help="Tempo em segundos para manter leitura (default 300s)")
+    parser.add_argument("--csv", dest="csv", help="Caminho CSV para salvar leituras")
+    parser.add_argument("--csv-raw", action="store_true", help="Incluir raw bytes hex e serviços detectados no CSV")
+    parser.add_argument("--reconnect", action="store_true", help="Tentar reconectar automaticamente durante --duration")
+    parser.add_argument("--retry-interval", type=int, default=5, help="Segundos entre tentativas de reconexão")
 
     args = parser.parse_args()
     ensure_python_platform()
 
     address = args.address
+    csv_path = args.csv
+    csv_raw = args.csv_raw
+    reconnect = args.reconnect
+    retry_interval = args.retry_interval
 
     async def _wrapper():
         nonlocal address
@@ -201,7 +225,7 @@ def main():
                 return
             address = found
 
-        await run(address, duration=args.duration)
+        await run(address, duration=args.duration, csv_path=csv_path, reconnect=reconnect, retry_interval=retry_interval, csv_raw=csv_raw)
 
     try:
         asyncio.run(_wrapper())
