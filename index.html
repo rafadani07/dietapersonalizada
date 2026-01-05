@@ -141,7 +141,22 @@
         </div>
        </div>
       </div>
-     </div>
+    </div>
+
+    <!-- Saved plans preview on welcome screen -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 -mt-6">
+        <div class="glass-effect rounded-2xl p-4 border border-white/10">
+          <h4 class="font-bold text-lg mb-2">Treinos Salvos</h4>
+          <div id="welcome-saved-workouts" class="space-y-2"></div>
+        </div>
+        <div class="glass-effect rounded-2xl p-4 border border-white/10">
+          <h4 class="font-bold text-lg mb-2">Dietas Salvas</h4>
+          <div id="welcome-saved-diets" class="space-y-2"></div>
+        </div>
+      </div>
+    </div>
+
     </div><!-- Profile Setup -->
     <div id="profile-setup" class="hidden space-y-6 fade-in">
      <div class="glass-effect rounded-2xl p-6 sm:p-8 shadow-2xl">
@@ -1161,7 +1176,8 @@
           user: userData,
           calculated: calculatedData,
           program: program,
-          macros: macros
+          macros: macros,
+          diet: buildDietPayload(goalCalories, macros, userData.goal)
         };
         // Salva automaticamente — o usuário pode renomear/apagar depois na lista
         saveWorkout(autoName, personValue, payload);
@@ -1265,6 +1281,26 @@
       localStorage.setItem(WORKOUTS_KEY, JSON.stringify(arr));
     }
 
+    // Build a simple diet payload (meals) from calories/macros and goal
+    function buildDietPayload(calories, macros, goal){
+      try{
+        const mealsPerDay = window.mealDatabase ? window.mealDatabase.length : 3;
+        const caloriesPerMeal = Math.round(calories / mealsPerDay);
+        const meals = (window.mealDatabase || []).map((meal, index) => ({
+          name: meal.name,
+          calories: caloriesPerMeal,
+          protein: Math.round(macros.protein / mealsPerDay),
+          carbs: Math.round(macros.carbs / mealsPerDay),
+          fat: Math.round(macros.fat / mealsPerDay),
+          options: meal.options && meal.options[goal] ? meal.options[goal] : meal.options
+        }));
+        return { calories, macros, goal, meals };
+      }catch(e){
+        console.error('Erro ao montar dieta', e);
+        return { calories, macros, goal, meals: [] };
+      }
+    }
+
     function saveWorkout(name, person, payload){
       if(!name) return;
       const list = getSavedWorkouts();
@@ -1272,6 +1308,7 @@
       list.unshift(item);
       setSavedWorkouts(list);
       renderSavedWorkouts();
+      try{ renderWelcomeSavedLists(); }catch(e){}
     }
 
     function deleteWorkout(id){
@@ -1326,6 +1363,40 @@
       });
     }
 
+    // Render small previews on the welcome screen
+    function renderWelcomeSavedLists(){
+      const containerW = document.getElementById('welcome-saved-workouts');
+      const containerD = document.getElementById('welcome-saved-diets');
+      if(containerW) containerW.innerHTML = '';
+      if(containerD) containerD.innerHTML = '';
+      const list = getSavedWorkouts();
+      if(!list || list.length === 0){
+        if(containerW) containerW.innerHTML = '<div class="text-sm text-gray-400">Nenhum treino salvo.</div>';
+        if(containerD) containerD.innerHTML = '<div class="text-sm text-gray-400">Nenhuma dieta salva.</div>';
+        return;
+      }
+      // show up to 4 recent items
+      const recent = list.slice(0, 6);
+      recent.forEach(item => {
+        const hasProgram = item.payload && item.payload.program;
+        const hasDiet = item.payload && (item.payload.diet || item.payload.meals || item.payload.macros);
+        if(hasProgram && containerW){
+          const el = document.createElement('div');
+          el.className = 'p-3 bg-gray-800/30 rounded-xl flex items-center justify-between';
+          el.innerHTML = `<div><div class="font-semibold">${escapeHtml(item.name)}</div><div class="text-xs text-gray-400">${escapeHtml(item.person||'—')}</div></div><div class="text-xs text-gray-400">${new Date(item.created).toLocaleDateString()}</div>`;
+          el.onclick = () => loadWorkoutToUI(item);
+          containerW.appendChild(el);
+        }
+        if(hasDiet && containerD){
+          const el = document.createElement('div');
+          el.className = 'p-3 bg-gray-800/30 rounded-xl flex items-center justify-between';
+          el.innerHTML = `<div><div class="font-semibold">${escapeHtml(item.name)}<span class="ml-2 text-xs text-gray-300">(dieta)</span></div><div class="text-xs text-gray-400">${escapeHtml(item.person||'—')}</div></div><div class="text-xs text-gray-400">${new Date(item.created).toLocaleDateString()}</div>`;
+          el.onclick = () => { loadWorkoutToUI(item); /* same loader shows summary including diet */ };
+          containerD.appendChild(el);
+        }
+      });
+    }
+
     function escapeHtml(s){
       if(!s) return '';
       return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"})[c]);
@@ -1351,7 +1422,7 @@
         });
       }
       // render on load
-      try{ renderSavedWorkouts(); }catch(e){console.error(e)}
+      try{ renderSavedWorkouts(); renderWelcomeSavedLists(); }catch(e){console.error(e)}
     })();
 
   </script>
