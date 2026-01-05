@@ -1150,6 +1150,26 @@
       btn.disabled = false;
       btn.textContent = 'Gerar Plano Personalizado';
       showScreen('dashboard');
+
+      // Auto-save generated plan (melhor prática): cria um treino com nome padrão e pessoa opcional
+      try {
+        const autoName = `Plano ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`;
+        const personField = document.getElementById('save-workout-person');
+        const personValue = personField ? personField.value.trim() : '';
+        const program = (window.workoutPrograms && window.workoutPrograms[userData.trainingDays]) ? window.workoutPrograms[userData.trainingDays][userData.level] : null;
+        const payload = {
+          user: userData,
+          calculated: calculatedData,
+          program: program,
+          macros: macros
+        };
+        // Salva automaticamente — o usuário pode renomear/apagar depois na lista
+        saveWorkout(autoName, personValue, payload);
+        // feedback visual simples
+        try { document.getElementById('sync-indicator').classList.remove('hidden'); setTimeout(()=>document.getElementById('sync-indicator').classList.add('hidden'), 2500); } catch(e){}
+      } catch(e) {
+        console.error('Erro ao autosalvar plano', e);
+      }
     });
 
     document.querySelectorAll('.water-add-btn').forEach(btn => {
