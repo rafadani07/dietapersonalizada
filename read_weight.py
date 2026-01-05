@@ -66,11 +66,21 @@ async def scan_for_prefix(prefix: str, timeout: int = 10) -> Optional[str]:
 async def list_services(address: str):
     print(f"Conectando para listar serviços: {address}...")
     async with BleakClient(address) as client:
-        svcs = await client.get_services()
+        # compat layer: alguns backends do bleak expõem get_services(), outros têm .services
+        try:
+            svcs = await client.get_services()
+        except AttributeError:
+            svcs = getattr(client, "services", None)
+
+        if not svcs:
+            print("Não foi possível obter serviços do cliente Bleak. Talvez o backend não exponha serviços aqui.")
+            return
+
         for s in svcs:
-            print(f"Service {s.uuid}: {s.description}")
+            desc = getattr(s, "description", "")
+            print(f"Service {s.uuid}: {desc}")
             for c in s.characteristics:
-                props = ",".join(c.properties)
+                props = ",".join(getattr(c, "properties", []))
                 print(f"  Char {c.uuid} ({props})")
 
 
@@ -117,7 +127,11 @@ async def run(address: str,
                         raise Exception("failed to connect")
 
                     print("Conectado. Procurando característica de peso...")
-                    services = await client.get_services()
+                    # obter serviços de forma compatível com diferentes backends do bleak
+                    try:
+                        services = await client.get_services()
+                    except AttributeError:
+                        services = getattr(client, "services", None)
                     service_uuids = [s.uuid for s in services]
                     characteristic_uuids = [c.uuid for s in services for c in s.characteristics]
                     if WEIGHT_CHAR in characteristic_uuids:
